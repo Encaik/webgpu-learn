@@ -1,4 +1,6 @@
-import { useEffect, useImperativeHandle, useRef } from "react";
+import { useEffect, useRef } from "react";
+import { createBuffer, initGpu } from "../utils/gpu";
+import { dot } from "../utils/math";
 
 const Canvas = () => {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -23,7 +25,7 @@ const Canvas = () => {
     1,
     2
   ]);
-  const uniformData = new Float32Array([
+  let uniformData = new Float32Array([
     1.0, 0.0, 0.0, 0.0, // x
     0.0, 1.0, 0.0, 0.0, // y
     0.0, 0.0, 1.0, 0.0, // z
@@ -34,48 +36,39 @@ const Canvas = () => {
   let rotateValue = 0.001;
   let angle = 0;
 
-  const createBuffer = (arr: Float32Array | Uint32Array, usage: GPUBufferUsageFlags) => {
-    const buffer = device?.createBuffer({
-      size: arr.byteLength,
-      usage: usage | GPUBufferUsage.COPY_DST,
-      mappedAtCreation: true
-    });
-    const constructor = arr.constructor as new (buffer: ArrayBuffer) => Float32Array | Uint32Array;
-    if (buffer) {
-      const view = new constructor(buffer.getMappedRange());
-      view.set(arr, 0);
-      buffer?.unmap();
-    }
-    return buffer;
-  }
-
   const frame = () => {
     // translate
-    // uniformData[3]+=scaleValue
-    // if(uniformData[3]>=0.8) translateValue = -0.001
-    // if(uniformData[3]<=0.2) translateValue = 0.001
-    // uniformData[7]+=scaleValue
-    // if(uniformData[7]>=0.8) translateValue = -0.001
-    // if(uniformData[7]<=0.2) translateValue = 0.001
+    if(uniformData.at(12)!>=0.8) translateValue = -0.001
+    if(uniformData.at(12)!<=0.2) translateValue = 0.001
+
+    uniformData = dot(new Float32Array([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      translateValue, 0, 0, 1
+    ]), uniformData)
 
     // rotate
-    angle += rotateValue;
-    uniformData[0] = Math.cos(angle);
-    uniformData[1] = -Math.sin(angle);
-    uniformData[4] = Math.sin(angle);
-    uniformData[5] = Math.cos(angle);
+    // angle += rotateValue;
+    // uniformData[0] = Math.cos(angle);
+    // uniformData[1] = -Math.sin(angle);
+    // uniformData[4] = Math.sin(angle);
+    // uniformData[5] = Math.cos(angle);
 
     // scale
-    // uniformData[0]+=scaleValue
-    // if(uniformData[0]>=0.8) scaleValue = -0.001
-    // if(uniformData[0]<=0.2) scaleValue = 0.001
-    // uniformData[5]+=scaleValue
-    // if(uniformData[5]>=0.8) scaleValue = -0.001
-    // if(uniformData[5]<=0.2) scaleValue = 0.001
-    let vertexBuffer = createBuffer(vertexData, GPUBufferUsage.VERTEX);
-    let colorBuffer = createBuffer(colorData, GPUBufferUsage.VERTEX);
-    let indexBuffer = createBuffer(indexData, GPUBufferUsage.INDEX);
-    let uniformBuffer = createBuffer(uniformData, GPUBufferUsage.UNIFORM);
+    if (uniformData.at(0)! >= 0.8) scaleValue = 0.999
+    if (uniformData.at(0)! <= 0.2) scaleValue = 1.001
+    uniformData = dot(new Float32Array([
+      scaleValue, 0, 0, 0,
+      0, scaleValue, 0, 0,
+      0, 0, scaleValue, 0,
+      0, 0, 0, 1
+    ]), uniformData)
+
+    let vertexBuffer = createBuffer(device!, vertexData, GPUBufferUsage.VERTEX);
+    let colorBuffer = createBuffer(device!, colorData, GPUBufferUsage.VERTEX);
+    let indexBuffer = createBuffer(device!, indexData, GPUBufferUsage.INDEX);
+    let uniformBuffer = createBuffer(device!, uniformData, GPUBufferUsage.UNIFORM);
     let commandEncoder = device?.createCommandEncoder();
     if (commandEncoder) {
       const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -191,37 +184,15 @@ fn main(@location(0) color: vec3<f32>) -> @location(0) vec4<f32> {
     requestAnimationFrame(frame);
   }
 
-  const initGpu = async () => {
-    gpu = navigator.gpu;
-    if (!gpu) {
-      console.log('不支持webgpu');
-      return;
-    }
-    adapter = await gpu.requestAdapter();
-    device = await adapter?.requestDevice() || null;
-    if (!device) {
-      console.log('没有显卡或相关设备')
-      return
-    }
-    let width = document.body.clientWidth;
-    let height = document.body.clientHeight;
-    if (canvas.current) {
-      canvas.current.width = width;
-      canvas.current.height = height;
-      ctx = canvas.current.getContext('webgpu');
-    }
-    format = gpu.getPreferredCanvasFormat();
-    ctx?.configure({
-      device,
-      format,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      alphaMode: 'opaque'
-    })
-    frame();
-  }
-
   useEffect(() => {
-    initGpu();
+    if (canvas.current) {
+      initGpu(canvas.current).then((res) => {
+        if (res) {
+          ({ ctx, gpu, adapter, device, format } = res);
+          frame();
+        }
+      });
+    }
   }, [])
 
   return (
